@@ -11,19 +11,21 @@
 /// @class spsc_queue
 /// @brief A single-producer, single-consumer (SPSC) bounded queue.
 ///
-/// @tparam T The type of elements stored in the queue. Must be default-initializable.
+/// @tparam T The type of elements stored in the queue. Must be default-initializable and movable.
 ///
 /// @details
 /// Ring-buffer based SPSC queue using atomic head_ and tail_ indices.
-/// 
+///
 /// - Exactly one producer modifies tail_.
 /// - Exactly one consumer modifies head_.
 /// - No locks; synchronization via atomics only.
 /// - Blocking push()/pop() use bounded spinning with periodic yield()
-/// - The internal buffer size is (capacity + 1). One slot is intentionally unused so that:
-///   * empty : head_ == tail_ 
-///   * full : (tail_ + 1) % buffer_size_ == head_
-///   This avoids a shared atomic size counter and simplifies the logic.
+///
+/// The internal buffer size is (capacity + 1). One slot is intentionally unused so that:
+///   * empty : head_ == tail_
+///   * full  : (tail_ + 1) % buffer_size_ == head_
+/// This avoids a shared atomic size counter and any shared RMW operations in the hot path.
+///
 /// - Memory ordering:
 ///   * Relaxed for loading indices in the thread that modifies them.
 ///   * Release-acquire for all other cases:
@@ -79,9 +81,10 @@ public:
         requires std::constructible_from<T, U &&>
     bool push(U &&item)
     {
-        for (std::size_t spin = 0; ;)
+        for (std::size_t spin = 0;;)
         {
-            if (closed_.load(std::memory_order_acquire)) {
+            if (closed_.load(std::memory_order_acquire))
+            {
                 return false;
             }
 
@@ -89,13 +92,15 @@ public:
             const std::size_t next = (t + 1) % buffer_size_;
 
             // Full if advancing tail would collide with head.
-            if (next != head_.load(std::memory_order_acquire)) {
+            if (next != head_.load(std::memory_order_acquire))
+            {
                 buffer_[t] = T(std::forward<U>(item));
                 tail_.store(next, std::memory_order_release);
                 return true;
             }
 
-            if (++spin >= yield_after_) {
+            if (++spin >= yield_after_)
+            {
                 std::this_thread::yield();
                 spin = 0;
             }
@@ -116,7 +121,6 @@ public:
         T value = std::move(buffer_[h]);
         const std::size_t next = (h + 1) % buffer_size_;
 
-        // Publish head advance after consuming.
         head_.store(next, std::memory_order_release);
         return value;
     }
@@ -124,12 +128,13 @@ public:
     // Blocking pop. Returns nullopt if the queue is empty and gets closed.
     std::optional<T> pop()
     {
-        for (std::size_t spin = 0; ;)
+        for (std::size_t spin = 0;;)
         {
             const std::size_t h = head_.load(std::memory_order_relaxed);
 
             // Empty if head catches tail.
-            if (h != tail_.load(std::memory_order_acquire)) {
+            if (h != tail_.load(std::memory_order_acquire))
+            {
                 T value = std::move(buffer_[h]);
                 const std::size_t next = (h + 1) % buffer_size_;
 
@@ -137,12 +142,14 @@ public:
                 return value;
             }
 
-            if (++spin >= yield_after_) {
+            if (++spin >= yield_after_)
+            {
                 std::this_thread::yield();
                 spin = 0;
             }
 
-            if (closed_.load(std::memory_order_acquire)) {
+            if (closed_.load(std::memory_order_acquire))
+            {
                 return std::nullopt;
             }
         }
@@ -176,10 +183,10 @@ private:
     const std::size_t buffer_size_;
     std::vector<T> buffer_;
     static constexpr std::size_t yield_after_ = 1024;
-    alignas(std::hardware_destructive_interference_size) 
-    std::atomic<std::size_t> head_ = 0;
-    alignas(std::hardware_destructive_interference_size) 
-    std::atomic<std::size_t> tail_ = 0;
-    alignas(std::hardware_destructive_interference_size) 
-    std::atomic<bool> closed_ = false;
+    alignas(std::hardware_destructive_interference_size)
+        std::atomic<std::size_t> head_ = 0;
+    alignas(std::hardware_destructive_interference_size)
+        std::atomic<std::size_t> tail_ = 0;
+    alignas(std::hardware_destructive_interference_size)
+        std::atomic<bool> closed_ = false;
 };

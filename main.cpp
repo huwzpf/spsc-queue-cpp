@@ -1,4 +1,4 @@
-#include "atomic_tail_head_spsc_queue.hpp"
+#include "atomic_wait_spsc_queue.hpp"
 #include <iostream>
 #include <thread>
 #include <cassert>
