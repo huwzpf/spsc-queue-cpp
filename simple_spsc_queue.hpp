@@ -7,15 +7,23 @@
 #include <stdexcept>
 #include <utility>
 
-/*
-    TODO:
-    * Consider dropping perfect forwarding in push and add two overloads -
-      one for lvalues and one for rvalues. It would simplify the code and make it more readable.
-    * Consider memory access pattern to elements in the queue - false sharing, alignment
-      Maybe it would be better in terms of performance to use a circular buffer instead of std::deque
-      with atomic head and tail indices and no locks. But it would be more complex to implement and test.
+/// @class spsc_queue
+/// @brief A single-producer, single-consumer (SPSC) bounded queue.
+///
+/// @tparam T The type of elements stored in the queue.
+///
+/// @details
+/// Mutex and condition variable based SPSC queue implementation.
+/// 
+/// - Uses a deque for storage with mutex-protected access.
+/// - Blocking push()/pop() use condition variables for efficient waiting.
+/// - The queue is non-copyable and non-movable.
+/// - NOT thread-safe for multiple producers or consumers.
+///
+/// @warning The queue must outlive all threads accessing it.
+/// Users are responsible for stopping and joining producer and consumer
+/// threads before destroying the queue.
 
-*/
 template <class T>
 class spsc_queue {
 public:
@@ -50,7 +58,7 @@ public:
         return locked_pop(lock);
     }
 
-    // Blocking pop. Returns nullopt if the gets closed.
+    // Blocking pop. Returns nullopt if the queue is empty and gets closed.
     std::optional<T> pop() {
         std::unique_lock<std::mutex> lock(mtx_);
         // continue if queue is closed_ or has at least one element

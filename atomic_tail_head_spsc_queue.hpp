@@ -1,37 +1,56 @@
 #include <concepts>
-#include <condition_variable>
+#include <thread>
 #include <cstddef>
-#include <deque>
-#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <utility>
 #include <vector>
+#include <new>
+#include <atomic>
 
-/*
-    TODO:
-    * Consider dropping perfect forwarding in push and add two overloads -
-      one for lvalues and one for rvalues. It would simplify the code and make it more readable.
-    * Consider memory access pattern to elements in the queue - false sharing, alignment
-      Maybe it would be better in terms of performance to use a circular buffer instead of std::deque
-      with atomic head and tail indices and no locks. But it would be more complex to implement and test.
+/// @class spsc_queue
+/// @brief A single-producer, single-consumer (SPSC) bounded queue.
+///
+/// @tparam T The type of elements stored in the queue. Must be default-initializable.
+///
+/// @details
+/// Ring-buffer based SPSC queue using atomic head_ and tail_ indices.
+/// 
+/// - Exactly one producer modifies tail_.
+/// - Exactly one consumer modifies head_.
+/// - No locks; synchronization via atomics only.
+/// - Blocking push()/pop() use bounded spinning with periodic yield()
+/// - The internal buffer size is (capacity + 1). One slot is intentionally unused so that:
+///   * empty : head_ == tail_ 
+///   * full : (tail_ + 1) % buffer_size_ == head_
+///   This avoids a shared atomic size counter and simplifies the logic.
+/// - Memory ordering:
+///   * Relaxed for loading indices in the thread that modifies them.
+///   * Release-acquire for all other cases:
+///     - closed_ is released by close() and acquired in push()/pop().
+///     - tail_ is released by push() and acquired in pop().
+///     - head_ is released by pop() and acquired in push().
+///
+/// @note The queue is non-copyable and non-movable. The queue must outlive
+/// all threads accessing it. Users are responsible for stopping and joining
+/// producer and consumer threads before destroying the queue.
+///
+/// @warning This queue is NOT thread-safe for multiple producers or consumers.
 
-*/
 template <class T>
-    requires std::default_initializable<T>
+    requires std::default_initializable<T> && std::movable<T>
 class spsc_queue
 {
 public:
-    spsc_queue(std::size_t capacity) : capacity_(capacity), buffer_size_(capacity + 1)
+    spsc_queue(std::size_t capacity) : capacity_(capacity), buffer_size_(capacity + 1), buffer_(buffer_size_)
     {
         if (capacity_ == 0)
         {
             throw std::invalid_argument("capacity must be > 0");
         }
-        buffer_.reserve(buffer_size_);
     }
 
-    // Non-blocking push. Returns false if the queue is full or closed_.
+    // Non-blocking push. Returns false if the queue is full or closed.
     template <typename U>
         requires std::constructible_from<T, U &&>
     bool try_push(U &&item)
@@ -40,7 +59,6 @@ public:
         {
             return false;
         }
-
         const std::size_t t = tail_.load(std::memory_order_relaxed);
         const std::size_t next = (t + 1) % buffer_size_;
 
@@ -52,10 +70,7 @@ public:
 
         buffer_[t] = T(std::forward<U>(item));
 
-        // Publish element before publishing tail.
         tail_.store(next, std::memory_order_release);
-        tail_.notify_one(); // wake consumer if waiting
-
         return true;
     }
 
@@ -64,7 +79,7 @@ public:
         requires std::constructible_from<T, U &&>
     bool push(U &&item)
     {
-        for (;;)
+        for (std::size_t spin = 0; ;)
         {
             if (closed_.load(std::memory_order_acquire)) {
                 return false;
@@ -73,10 +88,16 @@ public:
             const std::size_t t = tail_.load(std::memory_order_relaxed);
             const std::size_t next = (t + 1) % buffer_size_;
 
+            // Full if advancing tail would collide with head.
             if (next != head_.load(std::memory_order_acquire)) {
                 buffer_[t] = T(std::forward<U>(item));
                 tail_.store(next, std::memory_order_release);
                 return true;
+            }
+
+            if (++spin >= yield_after_) {
+                std::this_thread::yield();
+                spin = 0;
             }
         }
     }
@@ -97,20 +118,18 @@ public:
 
         // Publish head advance after consuming.
         head_.store(next, std::memory_order_release);
-        head_.notify_one(); // wake producer if waiting
-
         return value;
     }
 
-    // Blocking pop. Returns nullopt if the gets closed.
+    // Blocking pop. Returns nullopt if the queue is empty and gets closed.
     std::optional<T> pop()
     {
-        for (;;)
+        for (std::size_t spin = 0; ;)
         {
             const std::size_t h = head_.load(std::memory_order_relaxed);
-            const std::size_t t = tail_.load(std::memory_order_acquire);
 
-            if (h != t) {
+            // Empty if head catches tail.
+            if (h != tail_.load(std::memory_order_acquire)) {
                 T value = std::move(buffer_[h]);
                 const std::size_t next = (h + 1) % buffer_size_;
 
@@ -118,7 +137,11 @@ public:
                 return value;
             }
 
-            // empty
+            if (++spin >= yield_after_) {
+                std::this_thread::yield();
+                spin = 0;
+            }
+
             if (closed_.load(std::memory_order_acquire)) {
                 return std::nullopt;
             }
@@ -131,15 +154,10 @@ public:
 
     void close()
     {
-        if (!closed_.exchange(true, std::memory_order_release)) {
-            // Wake any producer/consumer blocked in atomic::wait loops.
-            head_.notify_all();
-            tail_.notify_all();
-            closed_.notify_all();
-        }
+        closed_.store(true, std::memory_order_release);
     }
 
-    // NOTE: Destructor calling close() is only a best-effort wakeup.
+    // Destructor calling close() is only a best-effort wakeup.
     // The queue must outlive all threads that may access it.
     // Users must stop/join producer & consumer before destroying the queue.
     ~spsc_queue()
@@ -156,11 +174,12 @@ public:
 private:
     const std::size_t capacity_;
     const std::size_t buffer_size_;
-    alignas(64)
-    std::atomic<size_t> head_ = 0;
-    alignas(64)
-    std::atomic<size_t> tail_ = 0;
-    alignas(64)
-    std::atomic<bool> closed_ = false;
     std::vector<T> buffer_;
+    static constexpr std::size_t yield_after_ = 1024;
+    alignas(std::hardware_destructive_interference_size) 
+    std::atomic<std::size_t> head_ = 0;
+    alignas(std::hardware_destructive_interference_size) 
+    std::atomic<std::size_t> tail_ = 0;
+    alignas(std::hardware_destructive_interference_size) 
+    std::atomic<bool> closed_ = false;
 };
