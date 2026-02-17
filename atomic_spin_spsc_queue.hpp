@@ -8,7 +8,7 @@
 #include <new>
 #include <atomic>
 
-/// @class spsc_queue
+/// @class atomic_spin_spsc_queue
 /// @brief A single-producer, single-consumer (SPSC) bounded queue.
 ///
 /// @tparam T The type of elements stored in the queue. Must be default-initializable and movable.
@@ -41,10 +41,10 @@
 
 template <class T>
     requires std::default_initializable<T> && std::movable<T>
-class spsc_queue
+class atomic_spin_spsc_queue
 {
 public:
-    spsc_queue(std::size_t capacity) : capacity_(capacity), buffer_size_(capacity + 1), buffer_(buffer_size_)
+    atomic_spin_spsc_queue(std::size_t capacity) : capacity_(capacity), buffer_size_(capacity + 1), buffer_(buffer_size_)
     {
         if (capacity_ == 0)
         {
@@ -167,26 +167,27 @@ public:
     // Destructor calling close() is only a best-effort wakeup.
     // The queue must outlive all threads that may access it.
     // Users must stop/join producer & consumer before destroying the queue.
-    ~spsc_queue()
+    ~atomic_spin_spsc_queue()
     {
         close();
     }
 
     // Let's not allow copying or moving the queue
-    spsc_queue(const spsc_queue &) = delete;
-    spsc_queue &operator=(const spsc_queue &) = delete;
-    spsc_queue(spsc_queue &&) = delete;
-    spsc_queue &operator=(spsc_queue &&) = delete;
+    atomic_spin_spsc_queue(const atomic_spin_spsc_queue &) = delete;
+    atomic_spin_spsc_queue &operator=(const atomic_spin_spsc_queue &) = delete;
+    atomic_spin_spsc_queue(atomic_spin_spsc_queue &&) = delete;
+    atomic_spin_spsc_queue &operator=(atomic_spin_spsc_queue &&) = delete;
 
 private:
     const std::size_t capacity_;
     const std::size_t buffer_size_;
     std::vector<T> buffer_;
     static constexpr std::size_t yield_after_ = 1024;
-    alignas(std::hardware_destructive_interference_size)
+    static constexpr std::size_t cacheline_size = 64;
+    alignas(cacheline_size)
         std::atomic<std::size_t> head_ = 0;
-    alignas(std::hardware_destructive_interference_size)
+    alignas(cacheline_size)
         std::atomic<std::size_t> tail_ = 0;
-    alignas(std::hardware_destructive_interference_size)
+    alignas(cacheline_size)
         std::atomic<bool> closed_ = false;
 };
