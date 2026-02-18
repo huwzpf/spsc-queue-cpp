@@ -1,5 +1,4 @@
-#include "atomic_spsc_queue.hpp"
-#include "simple_spsc_queue.hpp"
+#include "spsc_queue.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -33,11 +32,7 @@ namespace
         }
     }
 
-    using QueueImplementations = ::testing::Types<
-        simple_spsc_queue<int>,
-        atomic_spsc_queue<int>,
-        simple_spsc_queue<std::vector<int>>,
-        atomic_spsc_queue<std::vector<int>>>;
+    using QueueImplementations = ::testing::Types<spsc_queue<int>, spsc_queue<std::vector<int>>>;
 
     template <class QueueType>
     class SpscQueueTest : public ::testing::Test

@@ -9,7 +9,7 @@
 #include <atomic>
 #include <limits>
 
-/// @class atomic_spsc_queue
+/// @class spsc_queue
 /// @brief A single-producer, single-consumer (SPSC) bounded queue.
 ///
 /// @tparam T The type of elements stored in the queue.
@@ -48,12 +48,12 @@
 
 template <class T>
     requires std::default_initializable<T> && std::movable<T>
-class atomic_spsc_queue
+class spsc_queue
 {
 public:
     using value_type = T;
 
-    atomic_spsc_queue(std::size_t capacity) : capacity_(capacity), buffer_size_(capacity + 1), buffer_(buffer_size_)
+    spsc_queue(std::size_t capacity) : capacity_(capacity), buffer_size_(capacity + 1), buffer_(buffer_size_)
     {
         if (capacity_ == 0 || capacity_ > (std::numeric_limits<std::size_t>::max() - 1))
         {
@@ -181,16 +181,16 @@ public:
     // Destructor calling close() is only a best-effort wakeup.
     // The queue must outlive all threads that may access it.
     // Users must stop/join producer & consumer before destroying the queue.
-    ~atomic_spsc_queue()
+    ~spsc_queue()
     {
         close();
     }
 
     // Let's not allow copying or moving the queue
-    atomic_spsc_queue(const atomic_spsc_queue &) = delete;
-    atomic_spsc_queue &operator=(const atomic_spsc_queue &) = delete;
-    atomic_spsc_queue(atomic_spsc_queue &&) = delete;
-    atomic_spsc_queue &operator=(atomic_spsc_queue &&) = delete;
+    spsc_queue(const spsc_queue &) = delete;
+    spsc_queue &operator=(const spsc_queue &) = delete;
+    spsc_queue(spsc_queue &&) = delete;
+    spsc_queue &operator=(spsc_queue &&) = delete;
 
 private:
     const std::size_t capacity_;

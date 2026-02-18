@@ -1,5 +1,4 @@
-#include "atomic_spsc_queue.hpp"
-#include "simple_spsc_queue.hpp"
+#include "spsc_queue.hpp"
 
 #include <array>
 #include <atomic>
@@ -22,12 +21,6 @@ namespace
     constexpr std::size_t default_capacity = 1024;
     constexpr std::array<std::size_t, 3> standard_capacities{64, 1024, 8192};
     constexpr std::size_t heavy_cycles = 128;
-
-    enum class QueueKind
-    {
-        simple,
-        atomic,
-    };
 
     enum class Mode
     {
@@ -64,7 +57,6 @@ namespace
 
     struct Aggregate
     {
-        QueueKind queue = QueueKind::simple;
         BenchCase bench_case{};
         double avg_elapsed_ms = 0.0;
         double stdev_elapsed_ms = 0.0;
@@ -78,18 +70,6 @@ namespace
         }
     }
 
-    const char *to_string(QueueKind v)
-    {
-        switch (v)
-        {
-        case QueueKind::simple:
-            return "simple";
-        case QueueKind::atomic:
-            return "atomic";
-        }
-        return "unknown";
-    }
-
     const char *to_string(Mode v)
     {
         return v == Mode::blocking ? "blocking" : "nonblocking";
@@ -100,15 +80,15 @@ namespace
         switch (v)
         {
         case Scenario::blocking_standard:
-            return "standard";
+            return "standard (int)";
         case Scenario::nonblocking_standard:
-            return "standard";
+            return "standard (int)";
         case Scenario::big_payload:
             return "big-payload";
         case Scenario::producer_heavy:
-            return "producer-heavy";
+            return "producer-heavy (int)";
         case Scenario::consumer_heavy:
-            return "consumer-heavy";
+            return "consumer-heavy (int)";
         }
         return "unknown";
     }
@@ -258,12 +238,11 @@ namespace
     }
 
     template <template <class> class QueueTemplate>
-    void run_for_queue(QueueKind queue, const std::vector<BenchCase> &cases, std::vector<Aggregate> &aggregates)
+    void run_for_queue(const std::vector<BenchCase> &cases, std::vector<Aggregate> &aggregates)
     {
         for (const BenchCase &bc : cases)
         {
-            std::cout << std::format("[{}] Running {} {} cap={}\n",
-                                     to_string(queue),
+            std::cout << std::format("Running {} {} cap={}\n",
                                      to_string(mode_for(bc.scenario)),
                                      to_string(bc.scenario),
                                      bc.capacity);
@@ -276,7 +255,6 @@ namespace
             }
 
             Aggregate out;
-            out.queue = queue;
             out.bench_case = bc;
 
             std::vector<double> elapsed;
@@ -304,14 +282,12 @@ namespace
 
     void print_table(const std::vector<Aggregate> &rows)
     {
-        std::cout << std::format("{:<8}{:<15}{:<15}{:<15}{:<15}{:<15}\n",
-                                 "queue", "mode", "scenario", "cap",
-                                 "avg ms", "stdev ms");
+        std::cout << std::format("\n{:<15}{:<25}{:<15}{:<13}{:<13}\n",
+                                 "mode", "scenario", "cap", "avg ms", "stdev ms");
 
         for (const Aggregate &r : rows)
         {
-            std::cout << std::format("{:<8}{:<15}{:<15}{:<15}{:<13.2f}{:<13.2f}\n",
-                                     to_string(r.queue),
+            std::cout << std::format("{:<15}{:<25}{:<15}{:<13.2f}{:<13.2f}\n",
                                      to_string(mode_for(r.bench_case.scenario)),
                                      to_string(r.bench_case.scenario),
                                      r.bench_case.capacity,
@@ -328,8 +304,7 @@ int main(int argc, char **argv)
 
     const std::vector<BenchCase> cases = make_cases();
     std::vector<Aggregate> aggregates;
-    run_for_queue<simple_spsc_queue>(QueueKind::simple, cases, aggregates);
-    run_for_queue<atomic_spsc_queue>(QueueKind::atomic, cases, aggregates);
+    run_for_queue<spsc_queue>(cases, aggregates);
 
     print_table(aggregates);
     return 0;

@@ -1,20 +1,24 @@
 # spsc-queue-cpp
 
-C++20 project implementing and comparing two bounded single-producer/single-consumer (SPSC) queues:
-
-- `simple_spsc_queue<T>`: mutex + condition variable implementation.
-- `atomic_spsc_queue<T>`: Ring buffer using atomics with spin/yield waits.
+C++20 project implementing a bounded single-producer/single-consumer (SPSC) queuee - implemented with ring buffer using atomics and spin/yield waits for blocking access.
 
 The project includes:
 - A benchmark executable (`bench`) for comparing queue behavior across scenarios.
-- A GoogleTest suite (`queue_tests`) that runs the same black-box tests for both queue variants and for two payload types (`int`, `std::vector<int>`).
+- A GoogleTest suite (`queue_tests`) that runs  black-box tests for two payload types (`int`, `std::vector<int>`).
 
+*This is `interview` branch of this project, on `main` branch there is also `simple_spsc_queue` implementation using mutexes and condition variables, which is not included in this branch to keep the code shorter*
+
+*Tested using g++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0*
 ## Project Structure
+
+ - ***Queue implementation*** : `include/spsc_queue.hpp`
+ - ***Benchmark***: `src/main.cpp`
+ - ***Tests***: `tests/queue_tests.cpp`
+
 ```
 .
 ├── include/
-│   ├── atomic_spsc_queue.hpp
-│   └── simple_spsc_queue.hpp
+│   ├── spsc_queue.hpp
 ├── src/
 │   └── main.cpp
 ├── tests/
@@ -24,7 +28,7 @@ The project includes:
 ```
 
 ## API Summary
-Each queue exposes:
+API exposed by the queue:
 
 - `bool try_push(U&& item)`
 - `bool push(U&& item)` (blocking)
@@ -87,29 +91,26 @@ Reported metrics:
 
 ### Example benchmark results
 ```
-queue   mode           scenario       cap            avg ms       stdev ms       
-simple  blocking       standard       64             446.72       60.03        
-simple  nonblocking    standard       64             221.05       21.51        
-simple  blocking       standard       1024           171.75       8.10         
-simple  nonblocking    standard       1024           187.84       5.31         
-simple  blocking       standard       8192           158.76       5.59         
-simple  nonblocking    standard       8192           179.29       20.95        
-simple  blocking       big-payload    1024           247.37       21.18        
-simple  blocking       producer-heavy 1024           196.34       11.25        
-simple  blocking       consumer-heavy 1024           222.42       7.34         
-atomic  blocking       standard       64             45.36        3.34         
-atomic  nonblocking    standard       64             43.39        1.51         
-atomic  blocking       standard       1024           46.31        5.66         
-atomic  nonblocking    standard       1024           44.07        2.89         
-atomic  blocking       standard       8192           47.48        15.41        
-atomic  nonblocking    standard       8192           44.58        3.33         
-atomic  blocking       big-payload    1024           38.00        2.18         
-atomic  blocking       producer-heavy 1024           60.37        4.98         
-atomic  blocking       consumer-heavy 1024           50.39        2.47  
+mode           scenario                 cap            avg ms       stdev ms     
+blocking       standard (int)           64             49.88        6.04         
+nonblocking    standard (int)           64             46.53        5.93         
+blocking       standard (int)           1024           45.14        1.18         
+nonblocking    standard (int)           1024           45.33        1.09         
+blocking       standard (int)           8192           43.60        6.55         
+nonblocking    standard (int)           8192           45.62        2.18         
+blocking       big-payload              1024           41.14        0.97         
+blocking       producer-heavy (int)     1024           56.77        1.32         
+blocking       consumer-heavy (int)     1024           49.88        1.20   
 ```
 
-***Note about benchmark results:***
-The `simple_spsc_queue` is generally slower than the `atomic_spsc_queue` due to the overhead of mutexes and condition variables, but the benchmark does not measure CPU utilization and does not cature the fact that `atomic_spsc_queue` is more CPU intensive due to spin waits.
+As a comparison, the same benchmark was executed for a simple SPSC queue implementation using mutexes and condition variables (available on `main` branch). Results:
+
+```
+mode           scenario                 cap            avg ms       stdev ms  
+blocking       standard (int)           1024           171.75       8.10         
+nonblocking    standard (int)           1024           187.84       5.31 
+```
+
 
 
 
@@ -137,6 +138,6 @@ Current coverage:
 
 ```
 Summary coverage rate:
-  lines......: 100.0% (117 of 117 lines)
-  functions..: 100.0% (48 of 48 functions)
+  lines......: 96.5% (55 of 57 lines)
+  functions..: 100.0% (20 of 20 functions)
 ```
