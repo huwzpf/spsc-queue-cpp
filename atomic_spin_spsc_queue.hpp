@@ -7,6 +7,7 @@
 #include <vector>
 #include <new>
 #include <atomic>
+#include <limits>
 
 /// @class atomic_spin_spsc_queue
 /// @brief A single-producer, single-consumer (SPSC) bounded queue.
@@ -46,9 +47,9 @@ class atomic_spin_spsc_queue
 public:
     atomic_spin_spsc_queue(std::size_t capacity) : capacity_(capacity), buffer_size_(capacity + 1), buffer_(buffer_size_)
     {
-        if (capacity_ == 0)
+        if (capacity_ == 0 || capacity_ > (std::numeric_limits<std::size_t>::max() - 1))
         {
-            throw std::invalid_argument("capacity must be > 0");
+            throw std::invalid_argument("Invalid capacity: " + std::to_string(capacity_));
         }
     }
 

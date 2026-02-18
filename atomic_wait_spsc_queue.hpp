@@ -23,7 +23,7 @@
 ///
 /// The internal buffer size is (capacity + 1). One slot is intentionally unused so that:
 ///   * empty : head_ == tail_
-///   * full  : (tail_ + 1) % buffer_size_ == head_
+///   * full  : (tail_ - head_) == capacity_
 /// This avoids a shared atomic size counter and any shared RMW operations in the hot path.
 ///
 /// Memory orderings:
@@ -36,7 +36,8 @@
 /// Blocking behavior:
 ///   * push() waits on head_ when the queue is full (consumer must advance head_).
 ///   * pop() waits on tail_ when the queue is empty (producer must advance tail_).
-///   * close() sets closed_ and notifies waiters so blocked push()/pop() can return.
+///   * close() sets closed_, advances both head_/tail_ by buffer_size_, and
+///     notifies waiters so blocked push()/pop() can return.
 ///
 /// @note The queue is non-copyable and non-movable. The queue must outlive all threads
 /// accessing it. Users are responsible for stopping and joining producer and consumer
@@ -50,9 +51,9 @@ class atomic_wait_spsc_queue
 public:
     atomic_wait_spsc_queue(std::size_t capacity) : capacity_(capacity), buffer_size_(capacity + 1), buffer_(buffer_size_)
     {
-        if (capacity_ == 0)
+        if (capacity_ == 0 || capacity_ > (std::numeric_limits<std::size_t>::max() - 1))
         {
-            throw std::invalid_argument("capacity must be > 0");
+            throw std::invalid_argument("Invalid capacity: " + std::to_string(capacity_));
         }
     }
 
@@ -66,19 +67,23 @@ public:
             return false;
         }
         const std::size_t t = tail_.load(std::memory_order_relaxed);
-        const std::size_t next = (t + 1) % buffer_size_;
+        const std::size_t h = head_.load(std::memory_order_acquire);
 
-        // Full if advancing tail would collide with head.
-        if (next == head_.load(std::memory_order_acquire))
+        // Full if producer is capacity_ items ahead of consumer.
+        if ((t - h) == capacity_)
         {
             return false;
         }
 
-        buffer_[t] = T(std::forward<U>(item));
+        buffer_[t % buffer_size_] = T(std::forward<U>(item));
 
+        const std::size_t next = t + 1;
         tail_.store(next, std::memory_order_release);
         // Wake consumer if waiting
-        tail_.notify_one();
+        if (consumer_waiting_.load(std::memory_order_acquire))
+        {
+            tail_.notify_one();
+        }
         return true;
     }
 
@@ -95,21 +100,25 @@ public:
             }
 
             const std::size_t t = tail_.load(std::memory_order_relaxed);
-            const std::size_t next = (t + 1) % buffer_size_;
             const std::size_t h = head_.load(std::memory_order_acquire);
 
-            // Full if advancing tail would collide with head.
-            if (next != h)
+            // Full if producer is capacity_ items ahead of consumer.
+            if ((t - h) != capacity_)
             {
-                buffer_[t] = T(std::forward<U>(item));
+                buffer_[t % buffer_size_] = T(std::forward<U>(item));
+                const std::size_t next = t + 1;
                 tail_.store(next, std::memory_order_release);
                 // Wake consumer if waiting
-                tail_.notify_one();
+                if (consumer_waiting_.load(std::memory_order_acquire))
+                {
+                    tail_.notify_one();
+                }
                 return true;
             }
 
-            // Wait until consumer advances head_ or queue gets closed
+            producer_waiting_.store(true, std::memory_order_release);
             head_.wait(h, std::memory_order_relaxed);
+            producer_waiting_.store(false, std::memory_order_release);
         }
     }
 
@@ -117,19 +126,23 @@ public:
     std::optional<T> try_pop()
     {
         const std::size_t h = head_.load(std::memory_order_relaxed);
+        const std::size_t t = tail_.load(std::memory_order_acquire);
 
         // Empty if head catches tail.
-        if (h == tail_.load(std::memory_order_acquire))
+        if (h == t)
         {
             return std::nullopt;
         }
 
-        T value = std::move(buffer_[h]);
-        const std::size_t next = (h + 1) % buffer_size_;
+        T value = std::move(buffer_[h % buffer_size_]);
 
+        const std::size_t next = h + 1;
         head_.store(next, std::memory_order_release);
         // Wake producer if waiting
-        head_.notify_one();
+        if (producer_waiting_.load(std::memory_order_acquire))
+        {
+            head_.notify_one();
+        }
         return value;
     }
 
@@ -144,12 +157,15 @@ public:
             // Empty if head catches tail.
             if (h != t)
             {
-                T value = std::move(buffer_[h]);
-                const std::size_t next = (h + 1) % buffer_size_;
+                T value = std::move(buffer_[h % buffer_size_]);
 
+                const std::size_t next = h + 1;
                 head_.store(next, std::memory_order_release);
                 // Wake producer if waiting
-                head_.notify_one();
+                if (producer_waiting_.load(std::memory_order_acquire))
+                {
+                    head_.notify_one();
+                }
                 return value;
             }
 
@@ -158,8 +174,10 @@ public:
                 return std::nullopt;
             }
 
-            // Wait until producer advances tail_ or queue gets closed
+            consumer_waiting_.store(true, std::memory_order_release);
             tail_.wait(t, std::memory_order_relaxed);
+            consumer_waiting_.store(false, std::memory_order_release);
+
         }
     }
     std::size_t capacity() const
@@ -170,6 +188,9 @@ public:
     void close()
     {
         closed_.store(true, std::memory_order_release);
+        // Change both waited values without changing logical indices.
+        head_.fetch_add(buffer_size_, std::memory_order_acq_rel);
+        tail_.fetch_add(buffer_size_, std::memory_order_acq_rel);
         // Wake any producer/consumer blocked in atomic::wait.
         head_.notify_all();
         tail_.notify_all();
@@ -201,4 +222,8 @@ private:
         std::atomic<std::size_t> tail_ = 0;
     alignas(cacheline_size)
         std::atomic<bool> closed_ = false;
+    alignas(cacheline_size)
+        std::atomic<bool> consumer_waiting_ = false;
+    alignas(cacheline_size)
+        std::atomic<bool> producer_waiting_ = false;
 };
