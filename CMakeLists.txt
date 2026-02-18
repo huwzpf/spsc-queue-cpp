@@ -7,7 +7,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(ENABLE_COVERAGE "Enable Linux GCC gcov coverage instrumentation for unit tests" OFF)
 
-add_executable(bench main.cpp)
+add_executable(bench src/main.cpp)
+
+target_include_directories(
+    bench PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
 
 target_compile_options(bench PRIVATE
     -O3
@@ -34,7 +39,7 @@ tests/queue_tests.cpp
 
 target_include_directories(
     queue_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/include
 )
 
 target_link_libraries(queue_tests PRIVATE

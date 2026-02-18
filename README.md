@@ -9,6 +9,20 @@ The project includes:
 - A benchmark executable (`bench`) for comparing queue behavior across scenarios.
 - A GoogleTest suite (`queue_tests`) that runs the same black-box tests for both queue variants and for two payload types (`int`, `std::vector<int>`).
 
+## Project Structure
+```
+.
+├── include/
+│   ├── atomic_spsc_queue.hpp
+│   └── simple_spsc_queue.hpp
+├── src/
+│   └── main.cpp
+├── tests/
+│   └── queue_tests.cpp
+├── CMakeLists.txt
+└── README.md
+```
+
 ## API Summary
 Each queue exposes:
 
