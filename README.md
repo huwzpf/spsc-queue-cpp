@@ -1,11 +1,17 @@
 # spsc-queue-cpp
 
 ## Build
-Configure and build:
-`cmake -S . -B build && cmake --build build`
+Configure:
+`cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`
+Build: 
+`cmake --build build`
 
-Build benchmark target only:
-`cmake --build build --target bench`
+## Unit Tests
+Build tests:
+`cmake --build build --target queue_tests`
+
+Run tests:
+`ctest --test-dir build --output-on-failure`
 
 ## Benchmark
 Run benchmark:
@@ -21,10 +27,28 @@ The benchmark includes:
 Reported metrics:
 - `avg ms`
 - `stdev ms`
-- `avg ops/s`
-- `stdev ops/s`
 
 Notes:
 - Benchmark always runs all queues: `simple`, `spin`, `wait`.
 - Repeat count is fixed in `main.cpp`.
 - Workload skew is induced with fixed busy-cycle work (no sleeps).
+
+## Coverage (Linux + GCC)
+Coverage is supported only on Linux with GCC via `ENABLE_COVERAGE`.
+
+Configure with coverage enabled:
+`cmake -S . -B build -DENABLE_COVERAGE=ON`
+
+Build and run unit tests:
+`cmake --build build --target queue_tests`
+`ctest --test-dir build --output-on-failure`
+
+Generate HTML report (requires `lcov` and `genhtml`):
+```
+lcov --capture --directory build --output-file build/coverage.info
+lcov --remove build/coverage.info '/usr/*' '*/_deps/*' '*test*' --output-file build/coverage.filtered.info
+genhtml build/coverage.filtered.info --output-directory build/coverage-html
+```
+
+Open report:
+`build/coverage-html/index.html`

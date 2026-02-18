@@ -49,6 +49,8 @@ template <class T>
 class atomic_wait_spsc_queue
 {
 public:
+    using value_type = T;
+
     atomic_wait_spsc_queue(std::size_t capacity) : capacity_(capacity), buffer_size_(capacity + 1), buffer_(buffer_size_)
     {
         if (capacity_ == 0 || capacity_ > (std::numeric_limits<std::size_t>::max() - 1))

@@ -29,6 +29,8 @@ template <class T>
 class simple_spsc_queue
 {
 public:
+    using value_type = T;
+
     simple_spsc_queue(std::size_t capacity) : capacity_(capacity)
     {
         if (capacity_ == 0)
