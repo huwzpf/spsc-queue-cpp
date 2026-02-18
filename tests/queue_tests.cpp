@@ -92,7 +92,6 @@ namespace
         EXPECT_FALSE(q.try_pop().has_value());
     }
 
-
     TYPED_TEST(SpscQueueTest, TryPopAllowsDrainingQueueAfterClose)
     {
         TypeParam q(2);
@@ -112,7 +111,7 @@ namespace
         EXPECT_EQ(*second, make_queue_value<TypeParam>(2));
         EXPECT_FALSE(empty.has_value());
     }
-    
+
     TYPED_TEST(SpscQueueTest, TryPushTryPopPreservesOrder)
     {
         TypeParam q(3);
@@ -279,7 +278,6 @@ namespace
         EXPECT_FALSE(consumer.get().has_value());
     }
 
-
     TYPED_TEST(SpscQueueTest, BlockingPushReturnsFalseAfterCloseWhenFull)
     {
         TypeParam q(1);
@@ -302,18 +300,18 @@ namespace
 
     TYPED_TEST(SpscQueueTest, ProducerConsumerPreserveOrder)
     {
-        constexpr int kItemCount = 2000;
+        constexpr int item_count = 2000;
         using Value = queue_value_t<TypeParam>;
 
         TypeParam q(64);
         std::atomic<bool> producer_ok{true};
         std::atomic<bool> consumer_ok{true};
         std::vector<Value> consumed;
-        consumed.reserve(kItemCount);
+        consumed.reserve(item_count);
 
         std::jthread producer([&]
                               {
-            for (int i = 0; i < kItemCount; ++i)
+            for (int i = 0; i < item_count; ++i)
             {
                 if (!q.push(make_queue_value<TypeParam>(i)))
                 {
@@ -324,7 +322,7 @@ namespace
 
         std::jthread consumer([&]
                               {
-            for (int i = 0; i < kItemCount; ++i)
+            for (int i = 0; i < item_count; ++i)
             {
                 auto value = q.pop();
                 if (!value.has_value())
@@ -340,9 +338,9 @@ namespace
 
         ASSERT_TRUE(producer_ok.load(std::memory_order_relaxed));
         ASSERT_TRUE(consumer_ok.load(std::memory_order_relaxed));
-        ASSERT_EQ(static_cast<int>(consumed.size()), kItemCount);
+        ASSERT_EQ(static_cast<int>(consumed.size()), item_count);
 
-        for (int i = 0; i < kItemCount; ++i)
+        for (int i = 0; i < item_count; ++i)
         {
             EXPECT_EQ(consumed[i], make_queue_value<TypeParam>(i));
         }

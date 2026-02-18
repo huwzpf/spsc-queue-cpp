@@ -7,11 +7,13 @@
 #include <vector>
 #include <new>
 #include <atomic>
+#include <limits>
 
 /// @class atomic_wait_spsc_queue
 /// @brief A single-producer, single-consumer (SPSC) bounded queue.
 ///
-/// @tparam T The type of elements stored in the queue. Must be default-initializable and movable.
+/// @tparam T The type of elements stored in the queue.
+/// Must be default-initializable and movable.
 ///
 /// @details
 /// Ring-buffer based SPSC queue using atomic head_ and tail_ indices.
@@ -20,11 +22,15 @@
 /// - Exactly one consumer modifies head_ (pop/try_pop).
 /// - No locks; synchronization via atomics only.
 /// - Blocking push()/pop() use std::atomic::wait().
+/// - Storage is std::vector<T> sized to (capacity + 1), so slots are
+///   pre-constructed and updated by move-assignment.
 ///
 /// The internal buffer size is (capacity + 1). One slot is intentionally unused so that:
 ///   * empty : head_ == tail_
 ///   * full  : (tail_ - head_) == capacity_
 /// This avoids a shared atomic size counter and any shared RMW operations in the hot path.
+///
+/// Indices are monotonic counters. Buffer access uses modulo buffer_size_.
 ///
 /// Memory orderings:
 ///   * Relaxed for loading indices in the thread that modifies them.
@@ -38,12 +44,14 @@
 ///   * pop() waits on tail_ when the queue is empty (producer must advance tail_).
 ///   * close() sets closed_, advances both head_/tail_ by buffer_size_, and
 ///     notifies waiters so blocked push()/pop() can return.
+///   * producer_waiting_/consumer_waiting flags avoid unnecessary notify_one calls.
 ///
 /// @note The queue is non-copyable and non-movable. The queue must outlive all threads
 /// accessing it. Users are responsible for stopping and joining producer and consumer
 /// threads before destroying the queue.
 ///
 /// @warning This queue is NOT thread-safe for multiple producers or consumers.
+
 template <class T>
     requires std::default_initializable<T> && std::movable<T>
 class atomic_wait_spsc_queue
@@ -59,7 +67,7 @@ public:
         }
     }
 
-    // Non-blocking push. Returns false if the queue is full or closed.
+    // Non-blocking push. Returns false if queue is full or closed.
     template <typename U>
         requires std::constructible_from<T, U &&>
     bool try_push(U &&item)
@@ -89,7 +97,7 @@ public:
         return true;
     }
 
-    // Blocking push. Returns false if the queue gets closed.
+    // Blocking push. Returns false if queue gets closed while waiting.
     template <typename U>
         requires std::constructible_from<T, U &&>
     bool push(U &&item)
@@ -124,7 +132,7 @@ public:
         }
     }
 
-    // Non-blocking pop. Returns nullopt if the queue is empty.
+    // Non-blocking pop. Returns nullopt if queue is empty.
     std::optional<T> try_pop()
     {
         const std::size_t h = head_.load(std::memory_order_relaxed);
@@ -148,7 +156,7 @@ public:
         return value;
     }
 
-    // Blocking pop. Returns nullopt if the queue is empty and gets closed.
+    // Blocking pop. Returns nullopt if queue is closed and empty.
     std::optional<T> pop()
     {
         for (;;)
@@ -190,7 +198,7 @@ public:
     void close()
     {
         closed_.store(true, std::memory_order_release);
-        // Change both waited values without changing logical indices.
+        // Change both waited values while preserving the head-tail distance.
         head_.fetch_add(buffer_size_, std::memory_order_acq_rel);
         tail_.fetch_add(buffer_size_, std::memory_order_acq_rel);
         // Wake any producer/consumer blocked in atomic::wait.

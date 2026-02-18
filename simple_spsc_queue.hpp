@@ -13,10 +13,11 @@
 /// @tparam T The type of elements stored in the queue.
 ///
 /// @details
-/// Mutex and condition variable based SPSC queue implementation.
+/// Mutex + condition_variable based SPSC queue implementation.
 ///
 /// - Uses a deque for storage with mutex-protected access.
 /// - Blocking push()/pop() use condition variables for efficient waiting.
+/// - close() wakes blocked producer/consumer operations.
 /// - The queue is non-copyable and non-movable.
 /// - NOT thread-safe for multiple producers or consumers.
 ///
@@ -39,7 +40,7 @@ public:
         }
     }
 
-    // Non-blocking push. Returns false if the queue is full or closed_.
+    // Non-blocking push. Returns false if queue is full or closed.
     template <typename U>
         requires std::constructible_from<T, U &&>
     bool try_push(U &&item)
@@ -54,7 +55,7 @@ public:
     bool push(U &&item)
     {
         std::unique_lock<std::mutex> lock(mtx_);
-        // continue if queue is closed_ or it is smaller than capacity
+        // Wait until there is space, or until the queue gets closed.
         producer_cv_.wait(lock, [this]
                           { return closed_ || q_.size() < capacity_; });
 
@@ -68,11 +69,11 @@ public:
         return locked_pop(lock);
     }
 
-    // Blocking pop. Returns nullopt if the queue is empty and gets closed.
+    // Blocking pop. Returns nullopt if queue is closed and empty.
     std::optional<T> pop()
     {
         std::unique_lock<std::mutex> lock(mtx_);
-        // continue if queue is closed_ or has at least one element
+        // Wait until there is data, or until the queue gets closed.
         consumer_cv_.wait(lock, [this]
                           { return closed_ || !q_.empty(); });
 
@@ -97,6 +98,7 @@ public:
             closed_ = true;
         }
 
+        // Wake both sides so blocked push/pop can re-check close state.
         consumer_cv_.notify_all();
         producer_cv_.notify_all();
     }

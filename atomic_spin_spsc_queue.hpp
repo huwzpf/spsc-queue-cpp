@@ -12,7 +12,8 @@
 /// @class atomic_spin_spsc_queue
 /// @brief A single-producer, single-consumer (SPSC) bounded queue.
 ///
-/// @tparam T The type of elements stored in the queue. Must be default-initializable and movable.
+/// @tparam T The type of elements stored in the queue.
+/// Must be default-initializable and movable.
 ///
 /// @details
 /// Ring-buffer based SPSC queue using atomic head_ and tail_ indices.
@@ -20,7 +21,9 @@
 /// - Exactly one producer modifies tail_.
 /// - Exactly one consumer modifies head_.
 /// - No locks; synchronization via atomics only.
-/// - Blocking push()/pop() use bounded spinning with periodic yield()
+/// - Blocking push()/pop() use bounded spinning with periodic yield().
+/// - Storage is std::vector<T> sized to (capacity + 1), so slots are
+///   pre-constructed and updated by move-assignment.
 ///
 /// The internal buffer size is (capacity + 1). One slot is intentionally unused so that:
 ///   * empty : head_ == tail_
@@ -33,6 +36,9 @@
 ///     - closed_ is released by close() and acquired in push()/pop().
 ///     - tail_ is released by push() and acquired in pop().
 ///     - head_ is released by pop() and acquired in push().
+///
+/// close() sets a flag that is polled by blocked operations. No explicit
+/// wakeup primitive is needed because blocking operations spin.
 ///
 /// @note The queue is non-copyable and non-movable. The queue must outlive
 /// all threads accessing it. Users are responsible for stopping and joining
@@ -55,7 +61,7 @@ public:
         }
     }
 
-    // Non-blocking push. Returns false if the queue is full or closed.
+    // Non-blocking push. Returns false if queue is full or closed.
     template <typename U>
         requires std::constructible_from<T, U &&>
     bool try_push(U &&item)
@@ -79,7 +85,7 @@ public:
         return true;
     }
 
-    // Blocking push. Returns false if the queue gets closed.
+    // Blocking push. Returns false if queue gets closed while waiting.
     template <typename U>
         requires std::constructible_from<T, U &&>
     bool push(U &&item)
@@ -110,7 +116,7 @@ public:
         }
     }
 
-    // Non-blocking pop. Returns nullopt if the queue is empty.
+    // Non-blocking pop. Returns nullopt if queue is empty.
     std::optional<T> try_pop()
     {
         const std::size_t h = head_.load(std::memory_order_relaxed);
@@ -128,7 +134,7 @@ public:
         return value;
     }
 
-    // Blocking pop. Returns nullopt if the queue is empty and gets closed.
+    // Blocking pop. Returns nullopt if queue is closed and empty.
     std::optional<T> pop()
     {
         for (std::size_t spin = 0;;)
@@ -164,6 +170,7 @@ public:
 
     void close()
     {
+        // Blocked operations poll this flag and exit.
         closed_.store(true, std::memory_order_release);
     }
 
