@@ -9,7 +9,7 @@
 #include <atomic>
 #include <limits>
 
-/// @class atomic_spin_spsc_queue
+/// @class atomic_spsc_queue
 /// @brief A single-producer, single-consumer (SPSC) bounded queue.
 ///
 /// @tparam T The type of elements stored in the queue.
@@ -21,7 +21,7 @@
 /// - Exactly one producer modifies tail_.
 /// - Exactly one consumer modifies head_.
 /// - No locks; synchronization via atomics only.
-/// - Blocking push()/pop() use bounded spinning with periodic yield().
+/// - Blocking push()/pop() use busy wait with periodic yield().
 /// - Storage is std::vector<T> sized to (capacity + 1), so slots are
 ///   pre-constructed and updated by move-assignment.
 ///
@@ -48,12 +48,12 @@
 
 template <class T>
     requires std::default_initializable<T> && std::movable<T>
-class atomic_spin_spsc_queue
+class atomic_spsc_queue
 {
 public:
     using value_type = T;
 
-    atomic_spin_spsc_queue(std::size_t capacity) : capacity_(capacity), buffer_size_(capacity + 1), buffer_(buffer_size_)
+    atomic_spsc_queue(std::size_t capacity) : capacity_(capacity), buffer_size_(capacity + 1), buffer_(buffer_size_)
     {
         if (capacity_ == 0 || capacity_ > (std::numeric_limits<std::size_t>::max() - 1))
         {
@@ -90,21 +90,11 @@ public:
         requires std::constructible_from<T, U &&>
     bool push(U &&item)
     {
-        for (std::size_t spin = 0;;)
-        {
-            if (closed_.load(std::memory_order_acquire))
-            {
-                return false;
-            }
+        std::size_t spin = 0;
 
-            const std::size_t t = tail_.load(std::memory_order_relaxed);
-            const std::size_t next = (t + 1) % buffer_size_;
-
-            // Full if advancing tail would collide with head.
-            if (next != head_.load(std::memory_order_acquire))
+        while (!closed()) {
+            if (try_push(std::forward<U>(item)))
             {
-                buffer_[t] = T(std::forward<U>(item));
-                tail_.store(next, std::memory_order_release);
                 return true;
             }
 
@@ -114,6 +104,8 @@ public:
                 spin = 0;
             }
         }
+
+        return false;
     }
 
     // Non-blocking pop. Returns nullopt if queue is empty.
@@ -139,16 +131,15 @@ public:
     {
         for (std::size_t spin = 0;;)
         {
-            const std::size_t h = head_.load(std::memory_order_relaxed);
-
-            // Empty if head catches tail.
-            if (h != tail_.load(std::memory_order_acquire))
+            auto item = try_pop();
+            if (item.has_value())
             {
-                T value = std::move(buffer_[h]);
-                const std::size_t next = (h + 1) % buffer_size_;
+                return item;
+            }
 
-                head_.store(next, std::memory_order_release);
-                return value;
+            if (done())
+            {
+                return std::nullopt;
             }
 
             if (++spin >= yield_after_)
@@ -156,16 +147,29 @@ public:
                 std::this_thread::yield();
                 spin = 0;
             }
-
-            if (closed_.load(std::memory_order_acquire))
-            {
-                return std::nullopt;
-            }
         }
     }
+
     std::size_t capacity() const
     {
         return capacity_;
+    }
+
+    bool closed() const
+    {
+        return closed_.load(std::memory_order_acquire);
+    }
+
+    // True only when producer has called close() and all queued items are drained.
+    bool done() const
+    {
+        if (!closed_.load(std::memory_order_acquire))
+        {
+            return false;
+        }
+
+        const std::size_t h = head_.load(std::memory_order_relaxed);
+        return h == tail_.load(std::memory_order_acquire);
     }
 
     void close()
@@ -177,16 +181,16 @@ public:
     // Destructor calling close() is only a best-effort wakeup.
     // The queue must outlive all threads that may access it.
     // Users must stop/join producer & consumer before destroying the queue.
-    ~atomic_spin_spsc_queue()
+    ~atomic_spsc_queue()
     {
         close();
     }
 
     // Let's not allow copying or moving the queue
-    atomic_spin_spsc_queue(const atomic_spin_spsc_queue &) = delete;
-    atomic_spin_spsc_queue &operator=(const atomic_spin_spsc_queue &) = delete;
-    atomic_spin_spsc_queue(atomic_spin_spsc_queue &&) = delete;
-    atomic_spin_spsc_queue &operator=(atomic_spin_spsc_queue &&) = delete;
+    atomic_spsc_queue(const atomic_spsc_queue &) = delete;
+    atomic_spsc_queue &operator=(const atomic_spsc_queue &) = delete;
+    atomic_spsc_queue(atomic_spsc_queue &&) = delete;
+    atomic_spsc_queue &operator=(atomic_spsc_queue &&) = delete;
 
 private:
     const std::size_t capacity_;

@@ -91,6 +91,19 @@ public:
         return capacity_;
     }
 
+    bool closed() const
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        return closed_;
+    }
+
+    // True only when producer has called close() and all queued items are drained.
+    bool done() const
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        return closed_ && q_.empty();
+    }
+
     void close()
     {
         {
@@ -152,9 +165,9 @@ private:
     }
 
     const std::size_t capacity_;
-    std::condition_variable producer_cv_;
-    std::condition_variable consumer_cv_;
-    std::mutex mtx_;
+    mutable std::condition_variable producer_cv_;
+    mutable std::condition_variable consumer_cv_;
+    mutable std::mutex mtx_;
     bool closed_ = false;
     std::deque<T> q_;
 };

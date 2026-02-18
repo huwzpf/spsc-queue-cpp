@@ -1,5 +1,4 @@
-#include "atomic_spin_spsc_queue.hpp"
-#include "atomic_wait_spsc_queue.hpp"
+#include "atomic_spsc_queue.hpp"
 #include "simple_spsc_queue.hpp"
 
 #include <array>
@@ -27,8 +26,7 @@ namespace
     enum class QueueKind
     {
         simple,
-        spin,
-        wait
+        atomic,
     };
 
     enum class Mode
@@ -86,10 +84,8 @@ namespace
         {
         case QueueKind::simple:
             return "simple";
-        case QueueKind::spin:
-            return "spin";
-        case QueueKind::wait:
-            return "wait";
+        case QueueKind::atomic:
+            return "atomic";
         }
         return "unknown";
     }
@@ -175,42 +171,65 @@ namespace
 
         const auto start = std::chrono::steady_clock::now();
 
-        std::jthread producer([&]
-                              {
-        for (std::size_t i = 0; i < items; ++i)
+        if (mode == Mode::blocking)
         {
-            busy_cycles(producer_cycles);
-            if (mode == Mode::blocking)
-            {
-                const bool pushed = q.push(make_payload<Payload>(i));
-                assert(pushed);
-            }
-            else
-            {
-                while (!q.try_push(make_payload<Payload>(i))) {}
-            }
-        } });
+            std::jthread producer ([&]{
+                for (std::size_t i = 0; i < items; ++i)
+                {
+                    busy_cycles(producer_cycles);
+                    const bool pushed = q.push(make_payload<Payload>(i));
+                    assert(pushed);
+                }
+                q.close();
+            });
+            
+            std::jthread consumer([&]{
+                std::uint64_t expected = 0;
+                while (true)
+                {
+                    auto value = q.pop();
+                    if (!value.has_value())
+                    {
+                        break;
+                    }
 
-        std::jthread consumer([&]
-                              {
-        std::uint64_t expected = 0;
-        while (consumed < items)
-        {
-            auto value = (mode == Mode::blocking) ? q.pop() : q.try_pop();
-            if (!value.has_value())
-            {
-                assert (mode == Mode::nonblocking); // pop can only fail in non-blocking mode
-                continue;
-            }
+                    assert (payload_seq<Payload>(*value) == expected);
+                    busy_cycles(consumer_cycles);
+                    ++expected;
+                    ++consumed;
+                }
+            });
+        } else {
+            std::jthread producer ([&]{
+                for (std::size_t i = 0; i < items; ++i)
+                {
+                    busy_cycles(producer_cycles);
+                    while (!q.try_push(make_payload<Payload>(i))) {}
+                }
+                q.close();
+            });
+            
+            std::jthread consumer([&]{
+                std::uint64_t expected = 0;
+                while (true)
+                {
+                    auto value = q.try_pop();
+                    if (!value.has_value())
+                    {
+                        if (q.done())
+                        {
+                            break;
+                        }
+                        continue;
+                    }
 
-            assert (payload_seq<Payload>(*value) == expected);
-            busy_cycles(consumer_cycles);
-            ++expected;
-            ++consumed;
-        } });
-
-        producer.join();
-        consumer.join();
+                    assert (payload_seq<Payload>(*value) == expected);
+                    busy_cycles(consumer_cycles);
+                    ++expected;
+                    ++consumed;
+                }
+            });
+        }
 
         assert(consumed == items);
 
@@ -310,8 +329,7 @@ int main(int argc, char **argv)
     const std::vector<BenchCase> cases = make_cases();
     std::vector<Aggregate> aggregates;
     run_for_queue<simple_spsc_queue>(QueueKind::simple, cases, aggregates);
-    run_for_queue<atomic_spin_spsc_queue>(QueueKind::spin, cases, aggregates);
-    run_for_queue<atomic_wait_spsc_queue>(QueueKind::wait, cases, aggregates);
+    run_for_queue<atomic_spsc_queue>(QueueKind::atomic, cases, aggregates);
 
     print_table(aggregates);
     return 0;
